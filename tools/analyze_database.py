@@ -3,6 +3,7 @@
 Script d'analyse consolidé de la base de données.
 Affiche des statistiques et indicateurs de qualité des données.
 """
+
 import sys
 from pathlib import Path
 
@@ -246,13 +247,13 @@ def print_report():
         total_urls = sum(url_stats["athletes"].values())
         if total_urls > 0:
             print(
-                f"  Nouveau format : {url_stats['athletes']['new_format']:,} ({100*url_stats['athletes']['new_format']/total_urls:.1f}%)"
+                f"  Nouveau format : {url_stats['athletes']['new_format']:,} ({100 * url_stats['athletes']['new_format'] / total_urls:.1f}%)"
             )
             print(
-                f"  Ancien format  : {url_stats['athletes']['old_format']:,} ({100*url_stats['athletes']['old_format']/total_urls:.1f}%)"
+                f"  Ancien format  : {url_stats['athletes']['old_format']:,} ({100 * url_stats['athletes']['old_format'] / total_urls:.1f}%)"
             )
             print(
-                f"  Manquantes     : {url_stats['athletes']['missing']:,} ({100*url_stats['athletes']['missing']/total_urls:.1f}%)"
+                f"  Manquantes     : {url_stats['athletes']['missing']:,} ({100 * url_stats['athletes']['missing'] / total_urls:.1f}%)"
             )
 
     if url_stats and "clubs" in url_stats:
@@ -260,13 +261,13 @@ def print_report():
         total_urls = sum(url_stats["clubs"].values())
         if total_urls > 0:
             print(
-                f"  Nouveau format : {url_stats['clubs']['new_format']:,} ({100*url_stats['clubs']['new_format']/total_urls:.1f}%)"
+                f"  Nouveau format : {url_stats['clubs']['new_format']:,} ({100 * url_stats['clubs']['new_format'] / total_urls:.1f}%)"
             )
             print(
-                f"  Ancien format  : {url_stats['clubs']['old_format']:,} ({100*url_stats['clubs']['old_format']/total_urls:.1f}%)"
+                f"  Ancien format  : {url_stats['clubs']['old_format']:,} ({100 * url_stats['clubs']['old_format'] / total_urls:.1f}%)"
             )
             print(
-                f"  Manquantes     : {url_stats['clubs']['missing']:,} ({100*url_stats['clubs']['missing']/total_urls:.1f}%)"
+                f"  Manquantes     : {url_stats['clubs']['missing']:,} ({100 * url_stats['clubs']['missing'] / total_urls:.1f}%)"
             )
 
     # Recommandations

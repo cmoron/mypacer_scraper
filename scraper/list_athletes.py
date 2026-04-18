@@ -162,7 +162,6 @@ def extract_athlete_data(athletes: dict, soup: BeautifulSoup) -> dict:
     if soup:
         athlete_links = soup.find_all("a", href=lambda x: x and "javascript:bddThrowAthlete" in x)
         for link in athlete_links:
-
             id_athlete = link["href"].split(",")[1].strip("'").strip()
             if id_athlete not in athletes:
                 name_athlete = link.get_text(strip=True)
