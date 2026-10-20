@@ -5,6 +5,7 @@ Récupère les données des clubs d'athlétisme pour une année donnée et les s
 
 import argparse
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -13,16 +14,12 @@ from bs4 import BeautifulSoup
 
 from core.config import get_logger, setup_logging
 from core.db import create_database, get_db_connection
+from core.http import make_session
 
 # URL de la base de données des clubs d'athlétisme
 FIRST_YEAR = 2004
 BASES_ATHLE_URL = "https://www.athle.fr/bases/"
-SESSION = requests.Session()
-adapter = HTTPAdapter = requests.adapters.HTTPAdapter(
-    pool_connections=24,
-    pool_maxsize=24,
-)
-SESSION.mount("https://", adapter)
+SESSION = make_session()
 
 logger = get_logger(__name__)
 
@@ -291,7 +288,9 @@ def main():
 
         store_clubs(clubs)
     except requests.RequestException as e:
+        # Sortie non nulle : sinon le cron marque le run comme réussi.
         logger.error("Erreur lors de la requête : %s", e)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
