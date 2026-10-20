@@ -16,18 +16,14 @@ from bs4 import BeautifulSoup
 
 from core.config import get_logger, setup_logging
 from core.db import DatabaseConnectionError, create_database, get_db_connection
+from core.http import make_session
 
 logger = get_logger(__name__)
 
 # URL of the club
 CLUB_URL = "https://www.athle.fr/bases/liste.aspx?frmbase=cclubs&frmmode=2&frmespace=&frmtypeclub=M&frmsaison={year}&frmnclub={club_id}&frmposition={page}"
 ATHLETE_BASE_URL = "https://www.athle.fr/athletes/{athlete_id}"
-SESSION = requests.Session()
-adapter = HTTPAdapter = requests.adapters.HTTPAdapter(
-    pool_connections=24,
-    pool_maxsize=24,
-)
-SESSION.mount("https://", adapter)
+SESSION = make_session()
 
 # First year of the database
 FIRST_YEAR = 2004
@@ -48,12 +44,12 @@ def generate_club_url(year: int, club_id: str, page: int = 0) -> str:
     return CLUB_URL.format(year=year, club_id=club_id, page=page)
 
 
-def fetch_and_parse_html(url: str, max_retries: int = 3) -> BeautifulSoup | None:
+def fetch_and_parse_html(url: str, max_retries: int = 1) -> BeautifulSoup | None:
     """
     Fetch and parse the HTML content of a URL with retry logic
     Args:
         url (str): The URL to fetch
-        max_retries (int): Maximum number of retry attempts
+        max_retries (int): Extra attempts on top of the session retries
     Returns:
         BeautifulSoup: The parsed HTML content, or None if all retries failed
     """
