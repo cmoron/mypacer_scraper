@@ -25,5 +25,4 @@ def make_session(pool_size: int = 24, backoff_factor: float = 2.0) -> requests.S
     session = requests.Session()
     session.headers["User-Agent"] = USER_AGENT
     session.mount("https://", adapter)
-    session.mount("http://", adapter)
     return session

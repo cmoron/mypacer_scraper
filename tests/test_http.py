@@ -23,6 +23,8 @@ def test_session_retries_transient_503() -> None:
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         session = make_session(backoff_factor=0)
+        # Serveur de test en HTTP : on y monte l'adapter (et ses retries) de prod.
+        session.mount("http://", session.get_adapter("https://"))
         response = session.get(f"http://127.0.0.1:{server.server_port}/", timeout=5)
     finally:
         server.shutdown()
