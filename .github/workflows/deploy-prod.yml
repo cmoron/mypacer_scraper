@@ -52,24 +52,10 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          script: |
-            set -e
-
-            echo "🚀 Starting deployment to production..."
-            cd ${{ secrets.INFRA_PATH }}
-
-            echo "📥 Pulling production image (version: ${{ steps.version.outputs.version }})..."
-            docker-compose -f docker-compose.prod.yml pull scraper
-
-            echo "🔄 Restarting scraper container..."
-            # --no-deps : ne jamais recréer db au passage.
-            docker-compose -f docker-compose.prod.yml up -d --no-deps scraper
-
-            echo "⏳ Waiting for container to start..."
-            sleep 5
-
-            echo "✅ Deployment completed!"
-            docker-compose -f docker-compose.prod.yml ps scraper
+          # La clé est restreinte côté prod à la commande forcée
+          # mypacer_infra/scripts/deploy-scraper.sh (pull, up --no-deps,
+          # vérification running) : ce script est ignoré par le serveur.
+          script: deploy-scraper
 
       - name: Dry run info
         if: ${{ inputs.dry_run }}
@@ -78,24 +64,6 @@ jobs:
           echo "Would deploy version: ${{ steps.version.outputs.version }}"
           echo "Target: Production"
           echo "Container: scraper"
-
-      - name: Verify deployment
-        if: ${{ !inputs.dry_run }}
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          script: |
-            echo "🔍 Checking scraper container status..."
-            # Prod en Compose v1 : pas de `ps --format json`.
-            STATUS=$(docker inspect -f '{{.State.Status}}' mypacer-scraper)
-            docker inspect -f 'image={{.Image}} started={{.State.StartedAt}}' mypacer-scraper
-            if [ "$STATUS" != "running" ]; then
-              echo "❌ Scraper container is not running! Status: $STATUS"
-              exit 1
-            fi
-            echo "✅ Scraper container is running!"
 
       - name: Notify deployment success
         if: ${{ !inputs.dry_run }}
