@@ -59,16 +59,17 @@ jobs:
             cd ${{ secrets.INFRA_PATH }}
 
             echo "📥 Pulling production image (version: ${{ steps.version.outputs.version }})..."
-            docker compose -f docker-compose.prod.yml pull scraper
+            docker-compose -f docker-compose.prod.yml pull scraper
 
             echo "🔄 Restarting scraper container..."
-            docker compose -f docker-compose.prod.yml up -d scraper
+            # --no-deps : ne jamais recréer db au passage.
+            docker-compose -f docker-compose.prod.yml up -d --no-deps scraper
 
             echo "⏳ Waiting for container to start..."
             sleep 5
 
             echo "✅ Deployment completed!"
-            docker compose -f docker-compose.prod.yml ps scraper
+            docker-compose -f docker-compose.prod.yml ps scraper
 
       - name: Dry run info
         if: ${{ inputs.dry_run }}
@@ -87,7 +88,9 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script: |
             echo "🔍 Checking scraper container status..."
-            STATUS=$(docker compose -f ${{ secrets.INFRA_PATH }}/docker-compose.prod.yml ps scraper --format json | jq -r '.[0].State')
+            # Prod en Compose v1 : pas de `ps --format json`.
+            STATUS=$(docker inspect -f '{{.State.Status}}' mypacer-scraper)
+            docker inspect -f 'image={{.Image}} started={{.State.StartedAt}}' mypacer-scraper
             if [ "$STATUS" != "running" ]; then
               echo "❌ Scraper container is not running! Status: $STATUS"
               exit 1
