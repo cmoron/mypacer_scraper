@@ -11,6 +11,7 @@ from datetime import datetime
 from time import time
 
 import psycopg2
+import psycopg2.errors
 import requests
 from bs4 import BeautifulSoup
 
@@ -23,7 +24,10 @@ logger = get_logger(__name__)
 # URL of the club
 CLUB_URL = "https://www.athle.fr/bases/liste.aspx?frmbase=cclubs&frmmode=2&frmespace=&frmtypeclub=M&frmsaison={year}&frmnclub={club_id}&frmposition={page}"
 ATHLETE_BASE_URL = "https://www.athle.fr/athletes/{athlete_id}"
-SESSION = make_session()
+# ponytail: 4 fiches en parallèle suffisent (~7 min/semaine) et évitent les rafales vers athle.fr
+FETCH_WORKERS = 4
+SESSION = make_session(pool_size=FETCH_WORKERS)
+ATHLETE_HREF = re.compile(r"^/athletes/(\d+)")
 
 # First year of the database
 FIRST_YEAR = 2004
@@ -187,13 +191,14 @@ def extract_athlete_data_parallel(athletes: dict, soup: BeautifulSoup) -> dict:
         dict: The athletes
     """
     if soup:
-        athlete_links = soup.find_all("a", href=lambda x: x and "athletes" in x)
+        # Liens de fiche uniquement : le menu du site pointe aussi vers /athletes-accompagnement.
+        athlete_links = soup.find_all("a", href=ATHLETE_HREF)
 
         # Extract all athlete IDs first
         athlete_ids = []
         link_by_id = {}
         for link in athlete_links:
-            id_athlete = link["href"].split("/")[2].strip()
+            id_athlete = ATHLETE_HREF.match(link["href"]).group(1)
             athlete_ids.append(id_athlete)
             link_by_id[id_athlete] = link
 
@@ -216,7 +221,7 @@ def extract_athlete_data_parallel(athletes: dict, soup: BeautifulSoup) -> dict:
 
         # Only process new athletes
         if new_links:
-            with ThreadPoolExecutor(max_workers=24) as executor:
+            with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
                 future_to_athlete = {
                     executor.submit(fetch_and_extract_athlete_data, link): link
                     for link in new_links
@@ -240,7 +245,7 @@ def fetch_and_extract_athlete_data(link):
     Returns:
         dict: Extracted data for one athlete
     """
-    id_athlete = link["href"].split("/")[2].strip()
+    id_athlete = ATHLETE_HREF.match(link["href"]).group(1)
 
     logger.debug("Processing athlete ID: %s", id_athlete)
 
@@ -248,7 +253,12 @@ def fetch_and_extract_athlete_data(link):
     url = ATHLETE_BASE_URL.format(athlete_id=id_athlete)
 
     # Fetch athlete details from their page
-    birth_date, license_id, sexe, nationality = extract_birth_date_and_license(url)
+    details = extract_birth_date_and_license(url)
+    if details is None:
+        # Non stocké : l'athlète reste « nouveau » et sera retenté au prochain run.
+        logger.warning("Athlete %s skipped: page unavailable", id_athlete)
+        return None
+    birth_date, license_id, sexe, nationality = details
 
     return {
         "id": id_athlete,
@@ -278,6 +288,21 @@ def normalize_name(name: str) -> str:
         return " ".join(name.lower().split())
 
 
+# normalized_name inclus pour SQLite ; le trigger PostgreSQL le recalcule.
+UPSERT_ATHLETE = """
+    INSERT INTO athletes (ffa_id, name, normalized_name, url, birth_date, license_id, sexe, nationality)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (ffa_id) DO UPDATE SET
+        name = EXCLUDED.name,
+        normalized_name = EXCLUDED.normalized_name,
+        url = EXCLUDED.url,
+        birth_date = COALESCE(EXCLUDED.birth_date, athletes.birth_date),
+        license_id = COALESCE(EXCLUDED.license_id, athletes.license_id),
+        sexe = COALESCE(EXCLUDED.sexe, athletes.sexe),
+        nationality = COALESCE(EXCLUDED.nationality, athletes.nationality)
+"""
+
+
 def store_athletes(athletes: dict):
     """
     Store the athletes in the PostgreSQL database using the new schema.
@@ -299,35 +324,32 @@ def store_athletes(athletes: dict):
         for ffa_id, info in athletes.items():
             normalized = normalize_name(info["name"])
 
-            # Insert or update based on ffa_id
-            # Include normalized_name for compatibility with SQLite (PostgreSQL trigger will override)
-            cursor.execute(
-                """
-                INSERT INTO athletes (ffa_id, name, normalized_name, url, birth_date, license_id, sexe, nationality)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ffa_id) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    normalized_name = EXCLUDED.normalized_name,
-                    url = EXCLUDED.url,
-                    birth_date = COALESCE(EXCLUDED.birth_date, athletes.birth_date),
-                    license_id = COALESCE(EXCLUDED.license_id, athletes.license_id),
-                    sexe = COALESCE(EXCLUDED.sexe, athletes.sexe),
-                    nationality = COALESCE(EXCLUDED.nationality, athletes.nationality)
-            """,
-                (
-                    ffa_id,
-                    info["name"],
-                    normalized,
-                    info["url"],
-                    info["birth_date"],
-                    info.get("license_id"),
-                    info["sexe"],
-                    info["nationality"],
-                ),
+            row = (
+                ffa_id,
+                info["name"],
+                normalized,
+                info["url"],
+                info["birth_date"],
+                info.get("license_id"),
+                info["sexe"],
+                info["nationality"],
             )
+            # Savepoint : une licence en doublon ne doit pas annuler tout le club.
+            cursor.execute("SAVEPOINT athlete")
+            try:
+                cursor.execute(UPSERT_ATHLETE, row)
+            except psycopg2.errors.UniqueViolation:
+                cursor.execute("ROLLBACK TO SAVEPOINT athlete")
+                logger.warning(
+                    "License %s already used by another athlete, storing %s without license",
+                    info.get("license_id"),
+                    ffa_id,
+                )
+                cursor.execute(UPSERT_ATHLETE, row[:5] + (None,) + row[6:])
 
             if cursor.rowcount > 0:
                 inserted += 1
+            cursor.execute("RELEASE SAVEPOINT athlete")
 
         conn.commit()
         logger.info("Athletes stored: %d athletes", inserted)
@@ -426,14 +448,15 @@ def extract_athletes_from_club(year: int, club_id: str) -> dict:
     return athletes
 
 
-def extract_birth_date_and_license(url: str) -> dict:
+def extract_birth_date_and_license(url: str) -> tuple | None:
     """
     Extract birth date and license number from the athlete's page
     Args:
         url (str): The URL of the athlete
 
     Returns:
-        dict: Dictionary containing 'birth_date' and 'license_number'
+        tuple: (birth_date, license_number, sexe, nationality), champs à None
+        si la fiche est vide ; None si la page n'a pas pu être récupérée.
     """
     birth_date = None
     license_number = None
@@ -441,11 +464,11 @@ def extract_birth_date_and_license(url: str) -> dict:
     nationality = None
 
     soup = fetch_and_parse_html(url)
+    if soup is None:
+        return None
 
     # Normaliser tous les <p class="text-white"> en une liste de lignes lisibles
-    lines = []
-    if soup:
-        lines = [p.get_text(" ", strip=True) for p in soup.select("p.text-white")]
+    lines = [p.get_text(" ", strip=True) for p in soup.select("p.text-white")]
 
     for line in lines:
         # Année de naissance: "Né(e) en : 2004"
@@ -523,7 +546,10 @@ def fetch_and_update_athlete(ffa_id):
         ffa_id (str): The FFA ID of the athlete
     """
     url = ATHLETE_BASE_URL.format(athlete_id=ffa_id)
-    birth_date, license_id, sexe, nationality = extract_birth_date_and_license(url)
+    details = extract_birth_date_and_license(url)
+    if details is None:
+        raise RuntimeError(f"page unavailable: {url}")
+    birth_date, license_id, sexe, nationality = details
 
     # Mettre à jour la base de données
     conn = get_db_connection()

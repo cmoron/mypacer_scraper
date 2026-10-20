@@ -82,54 +82,52 @@ def test_update_existing_athlete_same_id(db_dsn):
 
 
 def test_different_ffa_ids_same_license(db_dsn):
-    """Test that two different ffa_ids CANNOT have the same valid license_id"""
-    # Contrainte métier : un numéro de licence FFA est unique par athlète
-    # La FFA ne recycle pas les numéros de licence
+    """Deux ffa_id ne partagent jamais une licence valide, sans bloquer le run.
 
-    import psycopg2.errors
-
-    # Insert athlete with first ffa_id and license_id
-    athletes = {
-        "OLD123": {
-            "name": "Test Athlete",
-            "url": "http://bases.athle.fr/OLD123",
-            "birth_date": "2000",
-            "license_id": "L123",
-            "sexe": "M",
-            "nationality": "FRA",
+    La contrainte unique rejette le doublon : l'athlète est stocké sans licence
+    et les autres athlètes du même club sont enregistrés.
+    """
+    store_athletes(
+        {
+            "OLD123": {
+                "name": "Test Athlete",
+                "url": "http://bases.athle.fr/OLD123",
+                "birth_date": "2000",
+                "license_id": "L123",
+                "sexe": "M",
+                "nationality": "FRA",
+            }
         }
-    }
-    store_athletes(athletes)
+    )
 
-    # Try to insert different athlete with same license_id
-    # This should FAIL because license_id must be unique
-    athletes = {
-        "NEW456": {
-            "name": "Different Athlete",
-            "url": "http://www.athle.fr/athletes/NEW456",
-            "birth_date": "2001",
-            "license_id": "L123",
-            "sexe": "F",
-            "nationality": "FRA",
+    store_athletes(
+        {
+            "NEW456": {
+                "name": "Different Athlete",
+                "url": "http://www.athle.fr/athletes/NEW456",
+                "birth_date": "2001",
+                "license_id": "L123",
+                "sexe": "F",
+                "nationality": "FRA",
+            },
+            "OTHER789": {
+                "name": "Other Athlete",
+                "url": "http://www.athle.fr/athletes/OTHER789",
+                "birth_date": "2002",
+                "license_id": "L789",
+                "sexe": "M",
+                "nationality": "FRA",
+            },
         }
-    }
+    )
 
-    # Should raise UniqueViolation
-    try:
-        store_athletes(athletes)
-        assert False, "Expected UniqueViolation but insertion succeeded"
-    except psycopg2.errors.UniqueViolation:
-        # Expected behavior: duplicate license_id rejected
-        pass
-
-    # Verify only one athlete exists
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM athletes WHERE license_id = %s", ("L123",))
-    count = cur.fetchone()[0]
+    cur.execute("SELECT ffa_id, license_id FROM athletes ORDER BY ffa_id")
+    rows = cur.fetchall()
     conn.close()
 
-    assert count == 1, "Only one athlete should exist with this license_id"
+    assert rows == [("NEW456", None), ("OLD123", "L123"), ("OTHER789", "L789")]
 
 
 def test_athlete_without_license_id(db_dsn):

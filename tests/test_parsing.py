@@ -80,3 +80,30 @@ def test_extract_birth_date_and_license(monkeypatch):
     assert license_id == "2387169"
     assert sexe == "F"
     assert nationality == "FRA"
+
+
+def test_extract_athlete_data_parallel_skips_non_athlete_links_and_failed_pages(monkeypatch):
+    """Lien de menu « /athletes-accompagnement » ignoré ; fiche en échec non stockée."""
+    html = (
+        (FIXTURES / "club_athletes.html")
+        .read_text()
+        .replace(
+            "<body>", '<body><a href="/athletes-accompagnement">Accompagnement des athlètes</a>'
+        )
+    )
+    soup = BeautifulSoup(html, "lxml")
+
+    def fake_extract(url):
+        # 974477 : athle.fr indisponible, la fiche doit être retentée au prochain run.
+        return None if url.endswith("974477") else ("2004", "2387169", "F", "FRA")
+
+    monkeypatch.setattr(list_athletes, "extract_birth_date_and_license", fake_extract)
+    monkeypatch.setattr(list_athletes, "get_existing_athlete_ids", lambda ids: set())
+    athletes = list_athletes.extract_athlete_data_parallel({}, soup)
+
+    assert list(athletes) == ["974476"]
+
+
+def test_extract_birth_date_and_license_returns_none_when_fetch_fails(monkeypatch):
+    monkeypatch.setattr(list_athletes, "fetch_and_parse_html", lambda url: None)
+    assert list_athletes.extract_birth_date_and_license("dummy") is None
