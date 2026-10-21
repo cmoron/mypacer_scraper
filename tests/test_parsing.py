@@ -107,3 +107,9 @@ def test_extract_athlete_data_parallel_skips_non_athlete_links_and_failed_pages(
 def test_extract_birth_date_and_license_returns_none_when_fetch_fails(monkeypatch):
     monkeypatch.setattr(list_athletes, "fetch_and_parse_html", lambda url: None)
     assert list_athletes.extract_birth_date_and_license("dummy") is None
+
+
+def test_parse_memberships_reads_category_per_athlete():
+    """Ligne de classement : « DOE Jane IA (40 pt) SE/F 1171659 (01/09/25) »."""
+    soup = BeautifulSoup((FIXTURES / "club_athletes.html").read_text(), "lxml")
+    assert list_athletes.parse_memberships(soup) == {"974476": "SE", "974477": "SE"}

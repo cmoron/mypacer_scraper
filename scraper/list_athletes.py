@@ -28,6 +28,8 @@ ATHLETE_BASE_URL = "https://www.athle.fr/athletes/{athlete_id}"
 FETCH_WORKERS = 4
 SESSION = make_session(pool_size=FETCH_WORKERS)
 ATHLETE_HREF = re.compile(r"^/athletes/(\d+)")
+# « IA (40 pt) SE/F 1171659 » : catégorie de la saison, puis sexe.
+CATEGORY_SEX = re.compile(r"\b([A-Z0-9]{2,3})/[MF]\b")
 
 # First year of the database
 FIRST_YEAR = 2004
@@ -431,21 +433,61 @@ def retrieve_clubs(club_id: str, year: int) -> dict:
     return res
 
 
-def extract_athletes_from_club(year: int, club_id: str) -> dict:
+def extract_athletes_from_club(year: int, club_id: str) -> tuple[dict, dict[str, str | None]]:
     """
     Extract athletes from a club
     Args:
         year (int): The year
         club_id (str): The club ID
     Returns:
-        dict: The athletes
+        tuple: (nouveaux athlètes à stocker, {ffa_id: catégorie} de tous les classés)
     """
-    athletes = {}
     url = generate_club_url(year, club_id)
     soup = fetch_and_parse_html(url)
     if soup:
-        return extract_athlete_data_parallel(athletes, soup)
-    return athletes
+        return extract_athlete_data_parallel({}, soup), parse_memberships(soup)
+    return {}, {}
+
+
+def parse_memberships(soup: BeautifulSoup) -> dict[str, str | None]:
+    """Catégorie de chaque athlète classé, lue sur la page club déjà téléchargée."""
+    memberships: dict[str, str | None] = {}
+    for link in soup.find_all("a", href=ATHLETE_HREF):
+        row = link.find_parent("div") or link.parent
+        match = CATEGORY_SEX.search(row.get_text(" ", strip=True))
+        memberships[ATHLETE_HREF.match(link["href"]).group(1)] = match.group(1) if match else None
+    return memberships
+
+
+def update_memberships(club_id: str, memberships: dict[str, str | None]) -> int:
+    """Rattache les athlètes déjà connus au club et à la catégorie de la saison.
+
+    Ne réécrit que les lignes qui changent : un run hebdomadaire ne touche que
+    les nouveaux classés et les mutations.
+    """
+    if not memberships:
+        return 0
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            UPDATE athletes a SET club_ffa_id = %s, category = m.category, updated_at = NOW()
+            FROM unnest(%s::text[], %s::text[]) AS m(ffa_id, category)
+            WHERE a.ffa_id = m.ffa_id
+              AND (a.club_ffa_id IS DISTINCT FROM %s OR a.category IS DISTINCT FROM m.category)
+            """,
+            (club_id, list(memberships), list(memberships.values()), club_id),
+        )
+        conn.commit()
+        return cursor.rowcount
+    except psycopg2.Error as e:
+        logger.error("Error updating memberships for club %s: %s", club_id, e)
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def extract_birth_date_and_license(url: str) -> tuple | None:
@@ -596,8 +638,9 @@ def process_clubs_and_athletes(first_year: int, last_year: int, club_id: str) ->
                 except UnicodeEncodeError:
                     logger.error("UnicodeEncodeError for %s", club_ffa_id)
                     raise
-                athletes = extract_athletes_from_club(year, club_ffa_id)
+                athletes, memberships = extract_athletes_from_club(year, club_ffa_id)
                 store_athletes(athletes)
+                logger.info("Memberships updated: %d", update_memberships(club_ffa_id, memberships))
 
         # Print final summary
         duration = time() - start_time
