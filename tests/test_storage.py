@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.db import get_db_connection
-from scraper.list_athletes import store_athletes
+from scraper.list_athletes import store_athletes, update_memberships
 from scraper.list_clubs import store_clubs
 
 # La fixture db_dsn est définie dans conftest.py et utilise PostgreSQL
@@ -56,3 +56,21 @@ def test_store_athletes(db_dsn):
     assert rows[0][0] == "ath1"
     assert rows[0][1] == "Athlete One"
     assert rows[0][4] == "L1"
+
+
+def test_update_memberships_sets_club_and_category_of_known_athletes(db_dsn):
+    athlete = {"url": "u", "birth_date": None, "license_id": None, "sexe": "F", "nationality": None}
+    store_athletes({"a1": {"name": "One", **athlete}, "a2": {"name": "Two", **athlete}})
+
+    assert update_memberships("033033", {"a1": "ES", "unknown": "SE"}) == 1
+    # Rien n'a changé : la ligne n'est pas réécrite.
+    assert update_memberships("033033", {"a1": "ES"}) == 0
+    # Mutation et changement de catégorie.
+    assert update_memberships("075001", {"a1": "SE"}) == 1
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT ffa_id, club_ffa_id, category FROM athletes ORDER BY ffa_id")
+    rows = cur.fetchall()
+    conn.close()
+    assert rows == [("a1", "075001", "SE"), ("a2", None, None)]
